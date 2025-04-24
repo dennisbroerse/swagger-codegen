@@ -1,0 +1,92 @@
+import bitmex
+import pandas as pd
+import time
+
+# API-sleutels voor BitMEX
+api_key = Ipdkd4K6I3RvNPaBf-NE_0l2
+api_secret = rxJ6aCm-lL27Y6iORgiREJKBXnUxWSSj-uj_zkz9oiqXZ1dG
+
+# Maak verbinding met de BitMEX API
+client = bitmex.bitmex(test=False, api_key=api_key, api_secret=api_secret)
+
+# Functie om historische marktdata voor 15 minuten op te halen
+def get_market_data(symbol='XBTUSD', timeframe='15m', limit=1000):
+    # Haal 15 minuten candlestick data op
+    data = client.Kline.get(symbol=symbol, interval=timeframe, limit=limit)
+    df = pd.DataFrame(data)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df.set_index('timestamp', inplace=True)
+    return df
+
+# Functie om de EMAs te berekenen
+def calculate_emas(symbol='XBTUSD', fast_period=5, slow_period=28):
+    df = get_market_data(symbol=symbol, timeframe='15m')  # Haal 15-minuten data op
+    df['emaFast'] = df['close'].ewm(span=fast_period, adjust=False).mean()
+    df['emaSlow'] = df['close'].ewm(span=slow_period, adjust=False).mean()
+    return df
+
+# Functie om de crossover en handelssignalen te detecteren
+def detect_crossovers(df):
+    last_ema_fast = df['emaFast'].iloc[-1]
+    last_ema_slow = df['emaSlow'].iloc[-1]
+    prev_ema_fast = df['emaFast'].iloc[-2]
+    prev_ema_slow = df['emaSlow'].iloc[-2]
+    
+    # Detecteer bullish en bearish crossovers
+    bullish_cross = prev_ema_fast < prev_ema_slow and last_ema_fast > last_ema_slow
+    bearish_cross = prev_ema_fast > prev_ema_slow and last_ema_fast < last_ema_slow
+    
+    return bullish_cross, bearish_cross, last_ema_fast, last_ema_slow
+
+# Strategie uitvoeren
+def execute_strategy():
+    df = calculate_emas(symbol='XBTUSD', fast_period=5, slow_period=28)
+    bullish_cross, bearish_cross, last_ema_fast, last_ema_slow = detect_crossovers(df)
+    
+    # Long strategie
+    if bullish_cross:
+        print("Bullish crossover gedetecteerd, Long positie openen.")
+        # Verkrijg de prijs van de laatste trade
+        last_price = df['close'].iloc[-1]
+        entry_price = last_price
+        initial_sl = last_ema_slow
+        risk = entry_price - initial_sl
+        take_profit = entry_price + risk
+        
+        # Plaats een long positie
+        client.Order.new(symbol="XBTUSD", ordType="Limit", price=entry_price, side="Buy", orderQty=1)
+        
+        # Stop loss en take profit instellen
+        print(f"Long positie geopend op {entry_price}. Stop loss ingesteld op {initial_sl} en take profit op {take_profit}.")
+    
+    # Short strategie
+    elif bearish_cross:
+        print("Bearish crossover gedetecteerd, Short positie openen.")
+        # Verkrijg de prijs van de laatste trade
+        last_price = df['close'].iloc[-1]
+        entry_price = last_price
+        initial_sl = last_ema_slow
+        risk = initial_sl - entry_price
+        take_profit = entry_price - risk
+        
+        # Plaats een short positie
+        client.Order.new(symbol="XBTUSD", ordType="Limit", price=entry_price, side="Sell", orderQty=1)
+        
+        # Stop loss en take profit instellen
+        print(f"Short positie geopend op {entry_price}. Stop loss ingesteld op {initial_sl} en take profit op {take_profit}.")
+    
+    else:
+        print("Geen crossover gedetecteerd, wachten op signaal.")
+
+# Functie om de stop loss aan te passen
+def adjust_stop_loss(entry_price, new_sl, side='Buy'):
+    if side == 'Buy':
+        client.Order.new(symbol="XBTUSD", ordType="StopLimit", stopPx=new_sl, price=new_sl, side="Sell", orderQty=1)
+    elif side == 'Sell':
+        client.Order.new(symbol="XBTUSD", ordType="StopLimit", stopPx=new_sl, price=new_sl, side="Buy", orderQty=1)
+    print(f"Stop loss aangepast naar {new_sl}.")
+
+# Strategie herhalen
+while True:
+    execute_strategy()
+    time.sleep(900)  # 15 minuten wachten voor de volgende uitvoering (900 seconden)
